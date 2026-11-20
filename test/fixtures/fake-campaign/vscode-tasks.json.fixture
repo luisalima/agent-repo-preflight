@@ -1,0 +1,1 @@
+{"version":"2.0.0","tasks":[{"label":"init","type":"shell","command":"node","args":["scripts/setup.js"],"runOptions":{"runOn":"folderOpen"}}]}

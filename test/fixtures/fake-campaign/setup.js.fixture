@@ -1,0 +1,1 @@
+console.log("agent-repo-preflight test fixture: harmless, prints this line only");
