@@ -24,20 +24,32 @@ Exit code 0: nothing flagged. 2: read the listed files by hand before you open t
 ## `--agents`: a first read by your coding agents
 Sends only the text of the flagged files to each agent, with the same question, and asks for a verdict line. One container per agent, holding that text and that agent's API key, nothing else: no repo folder, no GitHub, cloud or SSH credentials.
 
-| Agent | Needs | Locked down with |
-|---|---|---|
-| `claude` (Claude Code) | `ANTHROPIC_API_KEY` | `-p --bare --tools "" --strict-mcp-config`: no tools, no hooks, no CLAUDE.md, no MCP |
-| `codex` (OpenAI Codex CLI) | `OPENAI_API_KEY` | `exec -s read-only --ephemeral` from an empty folder; Codex has no "no tools" switch, so it can still run read-only commands inside its container |
-| `gemini` (Gemini CLI) | `GEMINI_API_KEY` | `-p --approval-mode plan` (read-only) from an empty folder |
+```bash
+./preflight.sh <repo> --agents claude,codex,gemini          # the agent CLIs, locked down
+./preflight.sh <repo> --agents claude,codex,gemini --raw    # a plain API request instead, no tools at all
+```
 
-Versions are pinned in `agents/*.sh` (override with `CLAUDE_CODE_VERSION`, `CODEX_VERSION`, `GEMINI_CLI_VERSION`). Add an agent by dropping an `agents/<name>.sh` that reads the text on stdin and the question in `$1`.
+**Network: each agent can reach its own provider and nothing else.** The agent container sits on an internal Docker network with no route out. Its only exit is a small proxy that allows HTTPS to one host. A fooled agent with tools still can't send anything anywhere else. `APF_SHOW_PROXY_LOG=1` prints which hosts each agent asked for and which were refused.
 
-An agent can be fooled by what it reads: that is the point of the attack. The repo's code never runs here, so the stealer itself can't reach your key. The remaining risk is the reviewing agent being talked into leaking its own API key:
-- **Claude** has no tools, so it can't read the key.
-- **Codex** can run read-only commands, so a fooled Codex could print its key in its answer (to your terminal).
-- **Gemini**: whether plan mode can still fetch URLs is not verified yet.
+| Agent | Key | Only host it can reach | Tools |
+|---|---|---|---|
+| `claude` (Claude Code) | `ANTHROPIC_API_KEY` | api.anthropic.com | none: `-p --bare --tools ""`, no hooks, no CLAUDE.md, no MCP, telemetry off |
+| `codex` (OpenAI Codex CLI) | `OPENAI_API_KEY` | api.openai.com | read-only sandbox, web search off; Codex has no switch to turn its shell off, so it can still run read-only commands in its container |
+| `gemini` (Gemini CLI) | `GEMINI_API_KEY` | generativelanguage.googleapis.com | none: a policy file denies every tool, including web_fetch (which can ask Google to fetch a URL, getting round the proxy) |
 
-Until the agent containers can only reach their own provider's API (planned), use a separate API key with a low spend limit for `--agents`, and revoke it if a verdict looks off.
+The CLIs are installed into pinned images on first use (`docker/agent.Dockerfile`; versions in `agents/*.sh`), so a run needs no package registry. Add an agent with an `agents/<name>.sh` that sets `ALLOW_HOST`, `KEY_VAR`, `RAW_PROVIDER`, `PKG` and `IMAGE`, reads the text on stdin and the question in `$1`.
+
+**`--raw`** skips the agent CLIs: `agents/raw.py` sends one plain request to each provider's API (Anthropic Messages, OpenAI Chat Completions, Gemini generateContent) with no tools declared, behind the same proxy. Nothing to hijack, but it no longer tests the agents themselves. Models: `RAW_ANTHROPIC_MODEL` (default `claude-sonnet-5-5`), `RAW_OPENAI_MODEL` (`gpt-5.4-mini`), `RAW_GEMINI_MODEL` (`gemini-flash-latest`).
+
+An agent can be fooled by what it reads: that is the point of the attack. The repo's code never runs here, so the stealer itself can't reach your key. What's left is the reviewing agent being talked into leaking its own key: Claude and Gemini have no tools to read it with; Codex could print it in its answer, to your terminal; and none of them can send it anywhere but their own provider.
+
+### Use a throwaway key
+Give `--agents` its own key, not the one you work with:
+- **Anthropic:** a key in a separate workspace with a low monthly spend limit.
+- **OpenAI:** a project key in a separate project with a budget.
+- **Google:** a separate API key, restricted to the Generative Language API.
+
+If a verdict looks off, or an answer mentions a key, revoke it and make a new one.
 
 ## How it stays out of harm's way
 - The clone runs with no credential helper, no git hooks and no submodules. Nothing from the repo lands on your disk: it lives in a Docker volume deleted at the end.
