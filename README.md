@@ -32,7 +32,12 @@ Sends only the text of the flagged files to each agent, with the same question, 
 
 Versions are pinned in `agents/*.sh` (override with `CLAUDE_CODE_VERSION`, `CODEX_VERSION`, `GEMINI_CLI_VERSION`). Add an agent by dropping an `agents/<name>.sh` that reads the text on stdin and the question in `$1`.
 
-An agent can be fooled by what it reads: that is the point of the attack. Here it has nothing to run and nothing to steal.
+An agent can be fooled by what it reads: that is the point of the attack. The repo's code never runs here, so the stealer itself can't reach your key. The remaining risk is the reviewing agent being talked into leaking its own API key:
+- **Claude** has no tools, so it can't read the key.
+- **Codex** can run read-only commands, so a fooled Codex could print its key in its answer (to your terminal).
+- **Gemini**: whether plan mode can still fetch URLs is not verified yet.
+
+Until the agent containers can only reach their own provider's API (planned), use a separate API key with a low spend limit for `--agents`, and revoke it if a verdict looks off.
 
 ## How it stays out of harm's way
 - The clone runs with no credential helper, no git hooks and no submodules. Nothing from the repo lands on your disk: it lives in a Docker volume deleted at the end.
