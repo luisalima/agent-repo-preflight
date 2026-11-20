@@ -54,6 +54,28 @@ if [ "${1:-}" = "--docker" ]; then
   expect "preflight clean (git)" 0 "$out" "Nothing flagged"
   left=$(docker volume ls -q | grep -c '^agent-preflight-' || true)
   [ "$left" = 0 ] && ok "no volumes left behind" || ko "$left volume(s) left behind"
+
+  # The network limit for --agents: through the proxy only the allowed host answers; nothing else, and
+  # nothing directly. Any HTTP status from the allowed host (401 without a key) means it was reached.
+  docker image inspect apf-proxy:1 >/dev/null 2>&1 || docker build -q -t apf-proxy:1 -f "$root/docker/proxy.Dockerfile" "$root/docker" >/dev/null
+  cat > "$tmp/probe.py" <<'EOF'
+import sys, urllib.request, urllib.error
+try:
+    urllib.request.urlopen(sys.argv[1], timeout=10); print("reached")
+except urllib.error.HTTPError: print("reached")
+except Exception as e: print("blocked", type(e).__name__)
+EOF
+  net="apf-test-$$"; px="$net-proxy"
+  docker network create --internal "$net" >/dev/null
+  docker run -d --rm --name "$px" --cap-drop ALL -e ALLOW_HOST=api.anthropic.com apf-proxy:1 >/dev/null
+  docker network connect "$net" "$px"; sleep 1.5
+  probe() { docker run --rm --network "$net" --cap-drop ALL -v "$tmp/probe.py:/probe.py:ro" "$@" 2>&1 | tail -1; }
+  via=(-e https_proxy="http://$px:8888" python:3.13-alpine python -I /probe.py)
+  [ "$(probe "${via[@]}" https://api.anthropic.com/v1/models)" = reached ] && ok "proxy: allowed host reached" || ko "proxy: allowed host not reached"
+  [[ "$(probe "${via[@]}" https://example.com)" == blocked* ]] && ok "proxy: other host blocked" || ko "proxy: other host NOT blocked"
+  [[ "$(probe "${via[@]}" https://api.anthropic.com.evil.example)" == blocked* ]] && ok "proxy: lookalike host blocked" || ko "proxy: lookalike host NOT blocked"
+  [[ "$(probe python:3.13-alpine python -I /probe.py https://api.anthropic.com/v1/models)" == blocked* ]] && ok "proxy: direct connection blocked" || ko "proxy: direct connection NOT blocked"
+  docker rm -f "$px" >/dev/null; docker network rm "$net" >/dev/null
 fi
 
 [ $fail = 0 ] && echo "all passed" || { echo "some failed"; exit 1; }
